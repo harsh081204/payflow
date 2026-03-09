@@ -1,0 +1,11 @@
+go 1.24.0
+
+use (
+	./analytics-service
+	./api-gateway
+	./notification-service
+	./order-service
+	./payment-service
+	./shared
+	./user-service
+)
