@@ -1,0 +1,178 @@
+services:
+  # ---------------
+  # INFRASTRUCTURE
+  # ---------------
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: payflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d payflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------
+  # MICROSERVICES
+  # ---------------
+  user-service:
+    build:
+      context: .
+      args:
+        SERVICE: user-service
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: 8081
+      ENVIRONMENT: development
+      DATABASE_URL: postgres://admin:password@postgres:5432/payflow?sslmode=disable
+      REDIS_ADDR: redis:6379
+      JWT_SECRET: supersecretkey
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  order-service:
+    build:
+      context: .
+      args:
+        SERVICE: order-service
+    ports:
+      - "8082:8082"
+    environment:
+      PORT: 8082
+      ENVIRONMENT: development
+      DATABASE_URL: postgres://admin:password@postgres:5432/payflow?sslmode=disable
+      REDIS_ADDR: redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  payment-service:
+    build:
+      context: .
+      args:
+        SERVICE: payment-service
+    ports:
+      - "8083:8083"
+    environment:
+      PORT: 8083
+      ENVIRONMENT: development
+      DATABASE_URL: postgres://admin:password@postgres:5432/payflow?sslmode=disable
+      REDIS_ADDR: redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  notification-service:
+    build:
+      context: .
+      args:
+        SERVICE: notification-service
+    environment:
+      PORT: 8084
+      ENVIRONMENT: development
+      DATABASE_URL: postgres://admin:password@postgres:5432/payflow?sslmode=disable
+      REDIS_ADDR: redis:6379
+      KAFKA_BROKERS: kafka:9092
+      WORKER_COUNT: 10
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  analytics-service:
+    build:
+      context: .
+      args:
+        SERVICE: analytics-service
+    ports:
+      - "8085:8085"
+    environment:
+      PORT: 8085
+      ENVIRONMENT: development
+      DATABASE_URL: postgres://admin:password@postgres:5432/payflow?sslmode=disable
+      REDIS_ADDR: redis:6379
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  api-gateway:
+    build:
+      context: .
+      args:
+        SERVICE: api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: 8080
+      ENVIRONMENT: development
+      DATABASE_URL: postgres://admin:password@postgres:5432/payflow?sslmode=disable
+      REDIS_ADDR: redis:6379
+      JWT_SECRET: supersecretkey
+      USER_SERVICE_URL: http://user-service:8081
+      ORDER_SERVICE_URL: http://order-service:8082
+      PAYMENT_SERVICE_URL: http://payment-service:8083
+    depends_on:
+      redis:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+      order-service:
+        condition: service_started
+      payment-service:
+        condition: service_started
+
+volumes:
+  postgres_data:

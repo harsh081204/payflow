@@ -3,6 +3,7 @@ go 1.24.0
 use (
 	./analytics-service
 	./api-gateway
+	./integration-tests
 	./notification-service
 	./order-service
 	./payment-service
